@@ -1,0 +1,53 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "FindPublicLabZone",
+      "Effect": "Allow",
+      "Action": [
+        "route53:ListHostedZones",
+        "route53:ListHostedZonesByName"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "InspectLabDNS",
+      "Effect": "Allow",
+      "Action": [
+        "route53:GetHostedZone",
+        "route53:ListResourceRecordSets",
+        "route53:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:route53:::hostedzone/*"
+    },
+    {
+      "Sid": "WaitForDNSChanges",
+      "Effect": "Allow",
+      "Action": "route53:GetChange",
+      "Resource": "arn:aws:route53:::change/*"
+    },
+    {
+      "Sid": "ManageMongoLabARecords",
+      "Effect": "Allow",
+      "Action": "route53:ChangeResourceRecordSets",
+      "Resource": "arn:aws:route53:::hostedzone/*",
+      "Condition": {
+        "ForAllValues:StringEquals": {
+          "route53:ChangeResourceRecordSetsNormalizedRecordNames": [
+            "mongo1.roblabb.com",
+            "mongo2.roblabb.com",
+            "mongo3.roblabb.com"
+          ],
+          "route53:ChangeResourceRecordSetsRecordTypes": [
+            "A"
+          ],
+          "route53:ChangeResourceRecordSetsActions": [
+            "CREATE",
+            "UPSERT",
+            "DELETE"
+          ]
+        }
+      }
+    }
+  ]
+}

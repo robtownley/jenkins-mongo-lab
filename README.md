@@ -48,7 +48,7 @@ No AMI ID is invented or hardcoded in this project. IDs are region-specific. Ter
 - Three voting, data-bearing nodes: `mongo1`, `mongo2`, `mongo3`. One elected primary, two secondaries; no arbiter, sharding or proxy.
 - Default `t3.medium`, 4 GiB RAM, 40 GiB encrypted gp3 root/data volume each. WiredTiger cache 1 GiB, oplog 1 GiB. AWS charges apply to instances, disks and public IPv4 addresses.
 - Three nodes in the same subnet/AZ: lab topology, not multi-AZ DR.
-- Stable member names `mongoN.mongodb.lab.internal` resolved through managed `/etc/hosts` entries on all nodes. No Route53 records or Jenkins hosts updater.
+- Stable member names `mongoN.mongodb.lab.internal` resolved through managed `/etc/hosts` entries on all nodes. Public Route53 A records `mongo1.roblabb.com`, `mongo2.roblabb.com` and `mongo3.roblabb.com` provide SSH names. No Jenkins hosts updater is needed.
 - Port 27017 bound only to loopback and private IPv4; security group permits it among members and from the existing AWS Jenkins SG. If firewalld is running, the playbook enables 27017/tcp there; AWS security group rules continue to restrict sources.
 - SCRAM admin credentials and persistent internal shared key. RPM user/group `mongod`; data `/var/lib/mongo`; log `/var/log/mongodb/mongod.log`; key `/var/lib/mongo/internal-auth/keyfile`, mode 0400 inside a 0700 directory.
 - Official MongoDB SELinux policy, pinned to commit `18181652362a46fd4511a56f20c4055712deb252`; key uses the data path's SELinux type. Existing SELinux enforcement is preserved. No permissive mode or disablement.
@@ -103,6 +103,24 @@ The pipeline waits for cloud-init, checks OS/kernel compatibility, installs pack
 Verification requires one primary/two secondaries, a build-token probe written with `w:3`, and that token read locally from all three nodes. A small `lab_health.replication_probe` document is overwritten per build. Failed startup waits show service journal diagnostics.
 
 A single replacement uses its stable name and initial-syncs from the surviving majority. Two unavailable members prevent election; the pipeline stops rather than force-recovering. Never replace multiple members of a populated set together. Config restarts may cause brief write/election interruptions. Runtime bootstrap, SELinux, initial sync and AWS replacement have not been tested on real EC2 nodes for this deliverable.
+
+## Public Route53 records
+
+Terraform looks up the existing public `roblabb.com` hosted zone and manages exactly three A records, each pointing to its corresponding node's public IPv4, with TTL 60. These records are separate from the MariaDB state and names. The hosted zone itself is never created or deleted. On replacement/IP changes, APPLY updates the records; DESTROY deletes these three records. The private replication hostnames remain unchanged.
+
+Before the first DNS APPLY, add `route53-mongodb-policy.json` as an additional inline policy named `MongoDBLabRoute53` on IAM role `JenkinsMariaDBLabPolicy`. Preserve all existing policies. DNS mutation permission is restricted to the three MongoDB A-record names. Alternatively, if the MariaDB Route53 policy is already attached, add those three names to its allowed `route53:ChangeResourceRecordSetsNormalizedRecordNames` list.
+
+Commit/push this update, then run PLAN. With the existing Rocky instance settings unchanged, expect only three new DNS records and an output change; no instance replacement. Then run APPLY. If a record already exists outside this Terraform state, import it deliberately rather than overwriting it (`allow_overwrite = false`). Example after backend initialization, substituting the actual hosted zone ID:
+
+```bash
+terraform -chdir=terraform import 'aws_route53_record.lab["mongo1"]' ZONEID_mongo1.roblabb.com_A
+```
+
+This uses public IPs like the MariaDB project's records. It does not open MongoDB to the internet; use SSH/tunnels. For example:
+
+```bash
+ssh -i /var/lib/jenkins/.ssh/mongodb-lab rocky@mongo1.roblabb.com
+```
 
 ## Access
 
