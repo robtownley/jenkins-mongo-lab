@@ -1,0 +1,4 @@
+home_jenkins_ipv4 = "203.0.113.10" # Replace with your real home public IPv4.
+# Defaults reuse your existing VPC/subnet/Jenkins SG; no existing resources are modified.
+# instance_type = "t3.medium"
+# root_volume_gb = 40

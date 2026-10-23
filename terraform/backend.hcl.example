@@ -1,0 +1,5 @@
+bucket       = "jenkins-mariadb-lab-robtownley-20261002"
+key          = "mongodb-lab/terraform.tfstate"
+region       = "eu-west-2"
+encrypt      = true
+use_lockfile = true

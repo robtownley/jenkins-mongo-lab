@@ -1,0 +1,10 @@
+.terraform/
+*.tfstate*
+*.tfplan
+terraform/backend.hcl
+terraform/terraform.tfvars
+inventory.json
+nodes.json
+known_hosts
+__pycache__/
+.venv/
