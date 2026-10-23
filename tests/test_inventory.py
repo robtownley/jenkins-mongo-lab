@@ -12,6 +12,7 @@ class InventoryTest(unittest.TestCase):
         inv = module.build(self.nodes(), 'public', '/key')
         node = inv['all']['children']['mongodb']['hosts']['mongo1']
         self.assertEqual(node['ansible_host'], '203.0.113.1')
+        self.assertEqual(inv['all']['vars']['ansible_user'], 'rocky')
         self.assertEqual(node['private_ip'], '10.0.0.1')
     def test_aws_runner_uses_private(self):
         inv = module.build(self.nodes(), 'private', '/key')

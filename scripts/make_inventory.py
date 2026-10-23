@@ -20,7 +20,7 @@ def build(nodes, mode, key):
             "private_ip": node["private_ip"], "mongo_hostname": hostname,
         }
     return {"all": {"vars": {
-        "ansible_user": "ubuntu", "ansible_ssh_private_key_file": key,
+        "ansible_user": "rocky", "ansible_ssh_private_key_file": key,
         "ansible_ssh_common_args": "-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=./known_hosts",
     }, "children": {"mongodb": {"hosts": hosts}}}}
 

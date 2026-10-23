@@ -20,27 +20,98 @@
           {% for node in groups['mongodb'] %}
           {{ hostvars[node].private_ip }} {{ hostvars[node].mongo_hostname }} {{ node }}
           {% endfor %}
-    - name: Install repository prerequisites
-      ansible.builtin.apt:
-        name: [ca-certificates, gnupg, curl]
-        update_cache: true
+    - name: Gather OS and kernel information
+      ansible.builtin.setup:
+        gather_subset: [min]
+    - name: Require Rocky Linux 9 and its stock 5.14 kernel series
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == 'Rocky'
+          - ansible_facts['distribution_major_version'] == '9'
+          - ansible_facts['architecture'] == 'x86_64'
+          - ansible_facts['kernel'] is match('^5[.]14[.]')
+        fail_msg: Select an official Rocky Linux 9 Base x86_64 image with its stock 5.14 kernel. No kernel or bootloader changes are performed.
+    - name: Install repository and SELinux prerequisites
+      ansible.builtin.dnf:
+        name:
+          - ca-certificates
+          - curl
+          - git
+          - make
+          - checkpolicy
+          - policycoreutils
+          - policycoreutils-python-utils
+          - selinux-policy-devel
+          - python3-libselinux
+        state: present
         lock_timeout: 300
-    - name: Install MongoDB repository signing key
-      ansible.builtin.get_url:
-        url: https://pgp.mongodb.com/server-8.0.asc
-        dest: /usr/share/keyrings/mongodb-server-8.0.asc
-        mode: '0644'
-    - name: Configure official MongoDB 8.0 repository
-      ansible.builtin.apt_repository:
-        repo: deb [arch=amd64 signed-by=/usr/share/keyrings/mongodb-server-8.0.asc] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse
-        filename: mongodb-org-8.0
-    - name: Install MongoDB and shell without auto-starting a standalone server
-      ansible.builtin.apt:
+    - name: Install MongoDB RPM signing key
+      ansible.builtin.rpm_key:
+        key: https://pgp.mongodb.com/server-8.0.asc
+        state: present
+    - name: Configure official MongoDB 8.0 EL9 repository
+      ansible.builtin.yum_repository:
+        name: mongodb-org-8.0
+        description: MongoDB 8.0 Repository
+        baseurl: https://repo.mongodb.org/yum/redhat/9/mongodb-org/8.0/x86_64/
+        gpgcheck: true
+        enabled: true
+        gpgkey: https://pgp.mongodb.com/server-8.0.asc
+    - name: Install MongoDB and shell
+      ansible.builtin.dnf:
         name: mongodb-org
         state: present
         update_cache: true
-        policy_rc_d: 101
         lock_timeout: 300
+    - name: Fetch official MongoDB SELinux policy at a reviewed commit
+      ansible.builtin.git:
+        repo: https://github.com/mongodb/mongodb-selinux.git
+        dest: /usr/local/src/mongodb-selinux
+        version: 18181652362a46fd4511a56f20c4055712deb252
+    - name: Build official SELinux policy
+      ansible.builtin.command:
+        argv: [make]
+        chdir: /usr/local/src/mongodb-selinux
+        creates: /usr/local/src/mongodb-selinux/build/targeted/mongodb.pp
+    - name: Install official SELinux policy
+      ansible.builtin.command:
+        argv: [make, install]
+        chdir: /usr/local/src/mongodb-selinux
+        creates: /usr/local/src/mongodb-selinux/.installed-18181652362a46fd4511a56f20c4055712deb252
+      register: selinux_policy_install
+    - name: Record installed SELinux policy revision
+      ansible.builtin.copy:
+        content: "18181652362a46fd4511a56f20c4055712deb252\n"
+        dest: /usr/local/src/mongodb-selinux/.installed-18181652362a46fd4511a56f20c4055712deb252
+        owner: root
+        group: root
+        mode: '0644'
+      when: selinux_policy_install.changed
+    - name: Discover firewall service
+      ansible.builtin.service_facts:
+    - name: Allow MongoDB through active firewalld
+      when:
+        - "'firewalld.service' in ansible_facts.services"
+        - "ansible_facts.services['firewalld.service'].state == 'running'"
+      block:
+        - name: Check persistent MongoDB port rule
+          ansible.builtin.command: firewall-cmd --permanent --query-port=27017/tcp
+          register: firewall_permanent
+          changed_when: false
+          failed_when: firewall_permanent.rc not in [0, 1]
+        - name: Persist MongoDB port rule
+          ansible.builtin.command: firewall-cmd --permanent --add-port=27017/tcp
+          when: firewall_permanent.rc == 1
+          changed_when: true
+        - name: Check runtime MongoDB port rule
+          ansible.builtin.command: firewall-cmd --query-port=27017/tcp
+          register: firewall_runtime
+          changed_when: false
+          failed_when: firewall_runtime.rc not in [0, 1]
+        - name: Apply runtime MongoDB port rule
+          ansible.builtin.command: firewall-cmd --add-port=27017/tcp
+          when: firewall_runtime.rc == 1
+          changed_when: true
 
 - name: Configure and restart members one at a time
   hosts: mongodb
@@ -55,12 +126,27 @@
           - lookup('env', 'MONGO_KEYFILE') is match('^[A-Za-z0-9+/=]{6,1024}$')
         fail_msg: Use the same single-line base64 key on every run.
       no_log: true
+    - name: Prepare standard RPM data and log paths
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: mongod
+        group: mongod
+        mode: '0750'
+      loop: [/var/lib/mongo, /var/log/mongodb]
+    - name: Prepare private key directory inside SELinux-labelled data path
+      ansible.builtin.file:
+        path: /var/lib/mongo/internal-auth
+        state: directory
+        owner: mongod
+        group: mongod
+        mode: '0700'
     - name: Write internal authentication key
       ansible.builtin.copy:
         content: "{{ lookup('env', 'MONGO_KEYFILE') }}"
-        dest: /etc/mongodb-keyfile
-        owner: mongodb
-        group: mongodb
+        dest: /var/lib/mongo/internal-auth/keyfile
+        owner: mongod
+        group: mongod
         mode: '0400'
       no_log: true
       notify: Restart MongoDB
@@ -72,6 +158,10 @@
         group: root
         mode: '0644'
       notify: Restart MongoDB
+    - name: Restore default SELinux labels for RPM paths and private key
+      ansible.builtin.command:
+        argv: [restorecon, -RF, /var/lib/mongo, /var/log/mongodb, /etc/mongod.conf, /usr/bin/mongod, /usr/lib/systemd/system/mongod.service]
+      changed_when: false
     - name: Apply configuration
       ansible.builtin.meta: flush_handlers
     - name: Ensure MongoDB starts on boot
@@ -79,11 +169,24 @@
         name: mongod
         state: started
         enabled: true
-    - name: Wait for local listener
-      ansible.builtin.wait_for:
-        host: 127.0.0.1
-        port: 27017
-        timeout: 120
+    - name: Check listener and show startup diagnostics if it fails
+      block:
+        - name: Wait for local listener
+          ansible.builtin.wait_for:
+            host: 127.0.0.1
+            port: 27017
+            timeout: 120
+      rescue:
+        - name: Read MongoDB service journal
+          ansible.builtin.command: journalctl -u mongod -n 60 --no-pager
+          register: startup_journal
+          changed_when: false
+        - name: Show MongoDB service journal
+          ansible.builtin.debug:
+            var: startup_journal.stdout_lines
+        - name: Stop because MongoDB did not start
+          ansible.builtin.fail:
+            msg: MongoDB is not listening; review the service journal above.
     - name: Install cluster helper
       ansible.builtin.copy:
         src: cluster.js

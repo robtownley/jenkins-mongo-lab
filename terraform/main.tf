@@ -3,16 +3,28 @@ locals {
 }
 data "aws_subnet" "lab" { id = var.subnet_id }
 data "aws_security_group" "jenkins" { id = var.jenkins_security_group_id }
-data "aws_ami" "ubuntu" {
-  most_recent = true
-  owners      = ["099720109477"]
+# Explicit image selection: no automatic migration to a different OS/kernel.
+data "aws_ami" "rocky" {
+  owners = ["792107900819"]
+  filter {
+    name   = "image-id"
+    values = [var.rocky_ami_id]
+  }
   filter {
     name   = "name"
-    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
+    values = ["Rocky-9-EC2-Base-9.*x86_64*"]
   }
   filter {
     name   = "architecture"
     values = ["x86_64"]
+  }
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+  filter {
+    name   = "root-device-type"
+    values = ["ebs"]
   }
   filter {
     name   = "state"
@@ -64,7 +76,7 @@ resource "aws_security_group" "database" {
 }
 resource "aws_instance" "node" {
   for_each                    = local.nodes
-  ami                         = data.aws_ami.ubuntu.id
+  ami                         = data.aws_ami.rocky.id
   instance_type               = var.instance_type
   subnet_id                   = var.subnet_id
   associate_public_ip_address = true
@@ -81,7 +93,6 @@ resource "aws_instance" "node" {
   credit_specification { cpu_credits = "standard" }
   tags = { Name = "mongodb-${each.key}", Role = each.key }
   lifecycle {
-    ignore_changes = [ami]
     precondition {
       condition     = data.aws_subnet.lab.vpc_id == var.vpc_id && data.aws_security_group.jenkins.vpc_id == var.vpc_id
       error_message = "Subnet and Jenkins security group must belong to the chosen VPC."

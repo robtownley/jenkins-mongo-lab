@@ -38,3 +38,12 @@ variable "root_volume_gb" {
     error_message = "Use at least 20 GiB, in whole GiB."
   }
 }
+
+variable "rocky_ami_id" {
+  type        = string
+  description = "Explicit official Rocky Linux 9 Base x86_64 AMI ID in aws_region. Changing it replaces all three nodes and deletes their root/data disks."
+  validation {
+    condition     = can(regex("^ami-[0-9a-f]{8}([0-9a-f]{9})?$", var.rocky_ami_id))
+    error_message = "Set rocky_ami_id to an official Rocky 9 Base x86_64 AMI in this region."
+  }
+}
